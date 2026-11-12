@@ -80,11 +80,12 @@ estimators_list = [
    conda activate stock_pred
    pytest tests -v
    ```
-   모든 테스트(`7 passed`)가 통과해야 합니다.
+   모든 테스트(`8 passed`)가 통과해야 합니다.
 
 2. **벤치마크 성적표 생성 및 PR 본문 첨부**
    ```bash
    python scripts/train_and_evaluate.py
    ```
    터미널 하단에 출력되는 `📋 [PR 본문 복사/붙여넣기용 벤치마크 리포트 (Markdown)]` 표를 복사하여 PR 설명란에 붙여넣어 주세요.
+   표의 `Baseline` 행은 Train 다수 클래스를 항상 예측한 결과입니다. **`Δ Acc vs 기준선`이 양수이고 ROC-AUC가 0.5보다 높아야** 실제로 의미 있는 개선으로 볼 수 있습니다.
    *(주의: `.pkl` 가중치 파일은 용량 및 충돌 방지를 위해 Git에 커밋하지 않으며, 코드가 머지된 후 메인 서버에서 재학습됩니다.)*

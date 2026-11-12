@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
 
 from stockpred.config import TrainingConfig, SAVED_MODELS_DIR
 from stockpred.feature_engine import FeatureEngine, get_feature_description
@@ -94,6 +94,7 @@ class ModelTrainer:
         self.models: Dict[str, Any] = {}
         self.best_thresholds: Dict[str, float] = {}
         self.eval_metrics: Dict[str, Dict[str, float]] = {}
+        self.baseline_metrics: Dict[str, Any] = {}
         self.features: List[str] = []
         self.scaler: Any = None
         self.window_size: int = TrainingConfig.WINDOW_SIZE
@@ -134,6 +135,35 @@ class ModelTrainer:
                     best_score = sc
                     best_th = float(th)
         return round(best_th, 4)
+
+    @staticmethod
+    def classification_metrics(
+        y_true: pd.Series, preds: np.ndarray, probs: Optional[np.ndarray] = None
+    ) -> Dict[str, Optional[float]]:
+        """Accuracy / Macro F1 / Balanced Accuracy / ROC-AUC 공통 계산 (단일 클래스면 AUC는 None)"""
+        auc: Optional[float] = None
+        if probs is not None and len(np.unique(y_true)) > 1:
+            auc = round(float(roc_auc_score(y_true, probs)), 4)
+        return {
+            "accuracy": round(float(accuracy_score(y_true, preds)), 4),
+            "f1_score": round(float(f1_score(y_true, preds, average="macro", zero_division=0)), 4),
+            "balanced_accuracy": round(float(balanced_accuracy_score(y_true, preds)), 4),
+            "roc_auc": auc,
+        }
+
+    @classmethod
+    def compute_baseline_metrics(cls, y_train: pd.Series, y_test: pd.Series) -> Dict[str, Any]:
+        """
+        다수 클래스(Majority Class) 기준선: Train에서 더 많았던 클래스를 Test 전 기간에 동일하게 예측합니다.
+        모델 Accuracy가 이 값보다 낮다면 '항상 같은 답을 찍는 것'보다 못한 것입니다.
+        """
+        majority = int(y_train.mean() >= 0.5) if len(y_train) > 0 else 0
+        preds = np.full(len(y_test), majority, dtype=int)
+        metrics = cls.classification_metrics(y_test, preds)
+        metrics["roc_auc"] = 0.5  # 상수 예측의 AUC
+        metrics["majority_class"] = majority
+        metrics["test_positive_rate"] = round(float(y_test.mean()), 4) if len(y_test) > 0 else 0.0
+        return metrics
 
     @classmethod
     def train(
@@ -183,7 +213,7 @@ class ModelTrainer:
         sw_tr = sample_weights[:val_split]
 
         best_thresholds: Dict[str, float] = {}
-        eval_metrics: Dict[str, Dict[str, float]] = {}
+        eval_metrics: Dict[str, Dict[str, Any]] = {}
 
         for name, model in models_dict.items():
             try:
@@ -204,14 +234,12 @@ class ModelTrainer:
             # Out-of-Sample Test Set 평가
             probs_test = model.predict_proba(X_test)[:, 1]
             test_preds = (probs_test > best_th).astype(int)
-            acc = float(accuracy_score(y_test, test_preds))
-            macro_f1 = float(f1_score(y_test, test_preds, average="macro", zero_division=0))
-
             eval_metrics[name] = {
-                "accuracy": round(acc, 4),
-                "f1_score": round(macro_f1, 4),
+                **cls.classification_metrics(y_test, test_preds, probs_test),
                 "best_threshold": best_th,
             }
+
+        baseline_metrics = cls.compute_baseline_metrics(y_train, y_test)
 
         trainer = cls()
         trainer.asset_key = norm_key
@@ -219,6 +247,7 @@ class ModelTrainer:
         trainer.models = models_dict
         trainer.best_thresholds = best_thresholds
         trainer.eval_metrics = eval_metrics
+        trainer.baseline_metrics = baseline_metrics
         trainer.features = features
         trainer.scaler = feat_engine.scaler
         trainer.window_size = window_size
@@ -255,6 +284,7 @@ class ModelTrainer:
             "models": self.models,
             "best_thresholds": self.best_thresholds,
             "eval_metrics": self.eval_metrics,
+            "baseline_metrics": self.baseline_metrics,
             "features": self.features,
             "train_date": self.train_date,
             "total_records": self.total_records,

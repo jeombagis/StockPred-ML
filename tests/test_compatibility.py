@@ -70,3 +70,27 @@ class TestMainProjectCompatibility:
         bt = Backtester.evaluate(trainer, lookback_days=20, processed_df=processed_df)
         assert bt["total_days"] == 20
         assert 0.0 <= bt["hit_ratio_pct"] <= 100.0
+
+    def test_baseline_metrics_reported(self, sample_stock_df, tmp_path):
+        """다수 클래스 기준선 및 추가 지표(Balanced Accuracy, ROC-AUC)가 계산되어 번들에 저장되는지 검증"""
+        trainer = ModelTrainer.train(
+            asset_key="SnP500",
+            raw_df=sample_stock_df,
+            fast_mode=True,
+            save_artifacts=True,
+            output_dir=tmp_path,
+        )
+
+        baseline = trainer.baseline_metrics
+        assert baseline["majority_class"] in (0, 1)
+        expected_acc = round(float((trainer.y_test == baseline["majority_class"]).mean()), 4)
+        assert baseline["accuracy"] == expected_acc
+        assert baseline["balanced_accuracy"] == 0.5
+        assert baseline["roc_auc"] == 0.5
+
+        for metrics in trainer.eval_metrics.values():
+            assert 0.0 <= metrics["balanced_accuracy"] <= 1.0
+            assert metrics["roc_auc"] is None or 0.0 <= metrics["roc_auc"] <= 1.0
+
+        bundle = joblib.load(tmp_path / "models_SnP500.pkl")
+        assert bundle["baseline_metrics"] == baseline
