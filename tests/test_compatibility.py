@@ -4,6 +4,8 @@ import pandas as pd
 from stockpred.trainer import ModelTrainer
 from stockpred.feature_engine import FeatureEngine
 from stockpred.backtester import Backtester
+from stockpred.config import TrainingConfig
+from stockpred.model_zoo import build_models
 
 
 class TestMainProjectCompatibility:
@@ -146,3 +148,32 @@ class TestMainProjectCompatibility:
 
         assert df_test["date"].iloc[0] == test_start
         assert len(X_test) == len(y_test) == len(completed) - split_idx
+
+    def test_brier_reported_with_baseline(self, sample_stock_df, tmp_path):
+        """확률 정확도(Brier)가 모델별·기준선 모두 계산되어야 함"""
+        trainer = ModelTrainer.train(
+            asset_key="SnP500",
+            raw_df=sample_stock_df,
+            fast_mode=True,
+            save_artifacts=False,
+            output_dir=tmp_path,
+        )
+        assert 0.0 <= trainer.baseline_metrics["brier"] <= 1.0
+        for metrics in trainer.eval_metrics.values():
+            assert 0.0 <= metrics["brier"] <= 1.0
+            # 임계값 탐색 범위 안에서 선택되어야 함
+            assert TrainingConfig.THRESHOLD_SEARCH_MIN <= metrics["best_threshold"] <= TrainingConfig.THRESHOLD_SEARCH_MAX
+
+    def test_class_balancing_off_by_default(self):
+        """기본값은 클래스 불균형 보정을 끄고(확률 보정 유지), balance_classes=True일 때만 켜져야 함"""
+        plain = build_models(scale_pos_weight=1.4, fast_mode=True)
+        assert plain["RF"].class_weight is None
+        assert plain["LGBM"].class_weight is None
+        assert plain["LR"].class_weight is None
+        assert plain["XGB"].scale_pos_weight == 1.0
+
+        balanced = build_models(scale_pos_weight=1.4, fast_mode=True, balance_classes=True)
+        assert balanced["RF"].class_weight == "balanced"
+        assert balanced["LGBM"].class_weight == "balanced"
+        assert balanced["LR"].class_weight == "balanced"
+        assert balanced["XGB"].scale_pos_weight == 1.4

@@ -48,7 +48,7 @@ pytest tests -v
 | **① 기술적 지표 / 파생변수 추가** | [`stockpred/feature_engine.py`](./stockpred/feature_engine.py) | `FeatureEngine.compute_custom_features()` 및 `CUSTOM_FEATURE_DESCRIPTIONS` |
 | **② 하이퍼파라미터 튜닝** | [`stockpred/model_zoo.py`](./stockpred/model_zoo.py) | `DEFAULT_HYPERPARAMETERS` (`scripts/tune_optuna.py`로 자동 탐색 가능) |
 | **③ 신규 알고리즘 및 앙상블 변경** | [`stockpred/model_zoo.py`](./stockpred/model_zoo.py) | `build_models()` (`MLP`, `ExtraTrees`, 가중치 보팅 등) |
-| **④ 타겟 정의 및 학습/검증 전략** | [`stockpred/config.py`](./stockpred/config.py), [`stockpred/trainer.py`](./stockpred/trainer.py) | `TrainingConfig` (`WINDOW_SIZE`, `THRESHOLD`, `TRAIN_WINDOW_ROWS`, `POOLED_TRAINING_ASSETS`), `prepare_datasets()`, `optimize_threshold()` |
+| **④ 타겟 정의 및 학습/검증 전략** | [`stockpred/config.py`](./stockpred/config.py), [`stockpred/trainer.py`](./stockpred/trainer.py) | `TrainingConfig` (`WINDOW_SIZE`, `THRESHOLD`, `TRAIN_WINDOW_ROWS`, `BALANCE_CLASSES`, `POOLED_TRAINING_ASSETS`), `prepare_datasets()`, `optimize_threshold()` |
 
 ---
 

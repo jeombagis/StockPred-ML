@@ -64,7 +64,7 @@ def prepare_validation_data(asset_key: str = "SnP500"):
 
     neg_count = int(sum(y_tr == 0))
     pos_count = int(sum(y_tr == 1))
-    scale_pos = (neg_count / pos_count) if pos_count > 0 else 1.0
+    scale_pos = (neg_count / pos_count) if pos_count > 0 and TrainingConfig.BALANCE_CLASSES else 1.0
 
     return X_tr, y_tr, X_val, y_val, sw_tr, scale_pos, asset_name
 
@@ -122,7 +122,7 @@ def run_tuning(asset_key: str = "SnP500", n_trials: int = 15):
             "num_leaves": int(rng.choice([15, 23, 31, 45])),
             "subsample": float(rng.choice([0.7, 0.8, 0.9])),
             "colsample_bytree": float(rng.choice([0.7, 0.8, 0.9])),
-            "class_weight": "balanced",
+            "class_weight": "balanced" if TrainingConfig.BALANCE_CLASSES else None,
             "verbose": -1,
         }
         model = LGBMClassifier(**cand, random_state=42, n_jobs=-1)
@@ -143,7 +143,7 @@ def run_tuning(asset_key: str = "SnP500", n_trials: int = 15):
             "min_samples_split": int(rng.choice([2, 4, 6])),
             "min_samples_leaf": int(rng.choice([1, 2, 4])),
             "max_features": "sqrt",
-            "class_weight": "balanced",
+            "class_weight": "balanced" if TrainingConfig.BALANCE_CLASSES else None,
         }
         model = RandomForestClassifier(**cand, random_state=42, n_jobs=-1)
         score = evaluate_candidate(model, X_tr, y_tr, X_val, y_val, sw_tr)

@@ -30,7 +30,6 @@ DEFAULT_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
         "max_depth": 5,
         "min_samples_leaf": 100,
         "max_features": 0.3,
-        "class_weight": "balanced",
     },
     "LGBM": {
         "n_estimators": 300,
@@ -42,12 +41,10 @@ DEFAULT_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
         "subsample_freq": 1,
         "colsample_bytree": 0.5,
         "reg_lambda": 10.0,
-        "class_weight": "balanced",
         "verbose": -1,
     },
     "LR": {
         "C": 0.01,
-        "class_weight": "balanced",
         "max_iter": 1000,
         "solver": "liblinear",
     },
@@ -58,6 +55,7 @@ def build_models(
     scale_pos_weight: float = 1.0,
     fast_mode: bool = False,
     custom_params: Optional[Dict[str, Dict[str, Any]]] = None,
+    balance_classes: bool = TrainingConfig.BALANCE_CLASSES,
 ) -> Dict[str, Any]:
     """
     개별 분류 모델 및 마스터 앙상블(Ensemble) 모델 딕셔너리를 생성하여 반환합니다.
@@ -82,6 +80,13 @@ def build_models(
                 params[model_key].update(overrides)
             else:
                 params[model_key] = dict(overrides)
+
+    # 클래스 불균형 보정 (기본 꺼짐: 확률 보정(Calibration)을 해치므로 TrainingConfig.BALANCE_CLASSES 참고)
+    if balance_classes:
+        for model_key in ("RF", "LGBM", "LR"):
+            params[model_key].setdefault("class_weight", "balanced")
+    else:
+        scale_pos_weight = 1.0
 
     if fast_mode:
         # 트리 수를 줄이는 대신 학습률을 높여 비슷한 적합 강도를 유지합니다.

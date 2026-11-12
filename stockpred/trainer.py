@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss, f1_score, roc_auc_score
 
 from stockpred.config import TrainingConfig, SAVED_MODELS_DIR
 from stockpred.feature_engine import FeatureEngine, get_feature_description
@@ -143,11 +143,19 @@ class ModelTrainer:
     def classification_metrics(
         y_true: pd.Series, preds: np.ndarray, probs: Optional[np.ndarray] = None
     ) -> Dict[str, Optional[float]]:
-        """Accuracy / Macro F1 / Balanced Accuracy / ROC-AUC 공통 계산 (단일 클래스면 AUC는 None)"""
+        """
+        Accuracy / Macro F1 / Balanced Accuracy / ROC-AUC / Brier 공통 계산.
+        - roc_auc: 단일 클래스면 None
+        - brier: 확률 정확도 (낮을수록 좋음, 기준선은 baseline_metrics['brier'])
+        """
         auc: Optional[float] = None
-        if probs is not None and len(np.unique(y_true)) > 1:
-            auc = round(float(roc_auc_score(y_true, probs)), 4)
+        brier: Optional[float] = None
+        if probs is not None and len(y_true) > 0:
+            brier = round(float(brier_score_loss(y_true, probs)), 4)
+            if len(np.unique(y_true)) > 1:
+                auc = round(float(roc_auc_score(y_true, probs)), 4)
         return {
+            "brier": brier,
             "accuracy": round(float(accuracy_score(y_true, preds)), 4),
             "f1_score": round(float(f1_score(y_true, preds, average="macro", zero_division=0)), 4),
             "balanced_accuracy": round(float(balanced_accuracy_score(y_true, preds)), 4),
@@ -164,6 +172,11 @@ class ModelTrainer:
         preds = np.full(len(y_test), majority, dtype=int)
         metrics = cls.classification_metrics(y_test, preds)
         metrics["roc_auc"] = 0.5  # 상수 예측의 AUC
+        # 확률 기준선: 항상 Train 상승 비율을 확률로 답했을 때의 Brier 점수
+        base_rate = float(y_train.mean()) if len(y_train) > 0 else 0.5
+        metrics["brier"] = (
+            round(float(brier_score_loss(y_test, np.full(len(y_test), base_rate))), 4) if len(y_test) > 0 else None
+        )
         metrics["majority_class"] = majority
         metrics["test_positive_rate"] = round(float(y_test.mean()), 4) if len(y_test) > 0 else 0.0
         return metrics
@@ -266,7 +279,7 @@ class ModelTrainer:
 
         neg_count = int(sum(y_train == 0))
         pos_count = int(sum(y_train == 1))
-        scale_pos = (neg_count / pos_count) if pos_count > 0 else 1.0
+        scale_pos = (neg_count / pos_count) if pos_count > 0 and TrainingConfig.BALANCE_CLASSES else 1.0
         sample_weights = cls.compute_sample_weights(y_train)
 
         models_dict = build_models(
@@ -370,6 +383,7 @@ class ModelTrainer:
                 "max_train_rows": self.max_train_rows,
                 "pooled_assets": self.pooled_assets,
                 "train_rows": self.train_rows,
+                "balance_classes": TrainingConfig.BALANCE_CLASSES,
             },
         }
         joblib.dump(bundle, bundle_file)
