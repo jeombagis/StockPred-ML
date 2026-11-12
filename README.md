@@ -48,7 +48,7 @@ pytest tests -v
 | **① 기술적 지표 / 파생변수 추가** | [`stockpred/feature_engine.py`](./stockpred/feature_engine.py) | `FeatureEngine.compute_custom_features()` 및 `CUSTOM_FEATURE_DESCRIPTIONS` |
 | **② 하이퍼파라미터 튜닝** | [`stockpred/model_zoo.py`](./stockpred/model_zoo.py) | `DEFAULT_HYPERPARAMETERS` (`scripts/tune_optuna.py`로 자동 탐색 가능) |
 | **③ 신규 알고리즘 및 앙상블 변경** | [`stockpred/model_zoo.py`](./stockpred/model_zoo.py) | `build_models()` (`MLP`, `ExtraTrees`, 가중치 보팅 등) |
-| **④ 타겟 정의 및 학습/검증 전략** | [`stockpred/config.py`](./stockpred/config.py), [`stockpred/trainer.py`](./stockpred/trainer.py) | `TrainingConfig` (`WINDOW_SIZE`, `THRESHOLD`), `optimize_threshold()` |
+| **④ 타겟 정의 및 학습/검증 전략** | [`stockpred/config.py`](./stockpred/config.py), [`stockpred/trainer.py`](./stockpred/trainer.py) | `TrainingConfig` (`WINDOW_SIZE`, `THRESHOLD`, `TRAIN_WINDOW_ROWS`, `POOLED_TRAINING_ASSETS`), `prepare_datasets()`, `optimize_threshold()` |
 
 ---
 
@@ -59,7 +59,7 @@ StockPred-ML/
 ├── stockpred/                     # 핵심 ML 코어 패키지
 │   ├── config.py                  # [영역 ④] 타겟 Threshold, Window Size, 분할 비율 설정
 │   ├── data_loader.py             # 로컬 시드 CSV 로드 및 yfinance 데이터 수집
-│   ├── feature_engine.py          # [영역 ①] 기본 28개 지표 + 크루원 커스텀 피처 엔진
+│   ├── feature_engine.py          # [영역 ①] 기본 35개 지표 + 크루원 커스텀 피처 엔진
 │   ├── model_zoo.py               # [영역 ②, ③] 모델 정의, 하이퍼파라미터 및 앙상블 구성
 │   ├── trainer.py                 # [영역 ④] 시계열 학습, 임계값 최적화, 평가 및 .pkl 번들 저장
 │   └── backtester.py              # 최근 20/60거래일 적중률(Hit Ratio) 백테스트 엔진

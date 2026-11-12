@@ -36,11 +36,20 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
     summary_rows = []
     feature_top5_map = {}
 
+    # 합동 학습(POOLED_TRAINING_ASSETS)에 쓰기 위해 전 자산 데이터를 먼저 로드
+    loaded = {
+        key: DataLoader.get_stock_data(key, use_yfinance=use_yfinance)
+        for key in TrainingConfig.PRESET_ASSETS
+    }
+
     for asset_key, info in TrainingConfig.PRESET_ASSETS.items():
         print(f"\n🚀 [{info['name']} ({asset_key})] 데이터 로드 및 피처 엔지니어링 중...")
-        raw_df, asset_name, ticker = DataLoader.get_stock_data(
-            asset_key, use_yfinance=use_yfinance
-        )
+        raw_df, asset_name, ticker = loaded[asset_key]
+        aux_raw_dfs = {
+            aux_key: loaded[aux_key][0]
+            for aux_key in TrainingConfig.POOLED_TRAINING_ASSETS.get(asset_key, [])
+            if aux_key in loaded
+        }
 
         trainer = ModelTrainer.train(
             asset_key=asset_key,
@@ -50,6 +59,7 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
             train_split=TrainingConfig.TRAIN_SPLIT,
             fast_mode=fast_mode,
             save_artifacts=True,
+            aux_raw_dfs=aux_raw_dfs,
         )
 
         feat_engine = FeatureEngine(
@@ -65,6 +75,8 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
         feature_top5_map[asset_name] = top_features
 
         print(f" - 총 거래일 레코드: {trainer.total_records:,}건 | 사용 피처 수: {len(trainer.features)}개")
+        pooled_label = f" (합동 학습: {', '.join(trainer.pooled_assets)})" if trainer.pooled_assets else ""
+        print(f" - 학습 행 수: {trainer.train_rows:,}건{pooled_label}")
         print(
             f" - 최근 20거래일 적중률: {bt_20['hit_ratio_pct']:.1f}% ({bt_20['hit_count']}/{bt_20['total_days']})"
         )
@@ -124,6 +136,8 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
     print(
         f"- **실험 설정**: `WINDOW_SIZE={TrainingConfig.WINDOW_SIZE}`, "
         f"`THRESHOLD={TrainingConfig.THRESHOLD}`, `TRAIN_SPLIT={TrainingConfig.TRAIN_SPLIT}`, "
+        f"`TRAIN_WINDOW_ROWS={TrainingConfig.TRAIN_WINDOW_ROWS}`, "
+        f"`POOLED_TRAINING_ASSETS={TrainingConfig.POOLED_TRAINING_ASSETS}`, "
         f"`총 피처 수={len(trainer.features)}개`\n"
     )
     print(

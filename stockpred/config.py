@@ -22,6 +22,10 @@ class TrainingConfig:
     - TRAIN_SPLIT: 전체 시계열 데이터 중 학습(Train) 데이터 비율 (기본: 0.8 = 80%)
     - VAL_SPLIT_IN_TRAIN: Train 데이터 내부에서 최적 결정 임계값(Threshold) 튜닝에 사용할 비율 (기본: 0.8)
     - TIME_DECAY_MIN_WEIGHT: 과거 데이터의 최소 가중치 (오래된 데이터 0.1 -> 최신 데이터 1.0 선형 증가)
+    - TRAIN_WINDOW_ROWS: 학습에 사용할 최근 거래일 수 (기본: 5040 = 약 20년, None이면 전체 기간 사용).
+      1960~80년대 데이터는 현재 시장과 성격이 달라, 최근 20년만 쓰는 편이 워크포워드 AUC가 높았습니다.
+    - POOLED_TRAINING_ASSETS: {대상 자산: [함께 학습할 보조 자산]}. 보조 자산의 '테스트 시작일 이전' 행을
+      학습 데이터에 합칩니다. Nasdaq 100은 S&P 500과 합쳐 학습할 때 AUC가 올랐고, S&P 500은 반대였습니다.
     """
     WINDOW_SIZE: int = 5
     THRESHOLD: float = 0.002
@@ -29,6 +33,10 @@ class TrainingConfig:
     VAL_SPLIT_IN_TRAIN: float = 0.8
     TIME_DECAY_MIN_WEIGHT: float = 0.1
     RANDOM_STATE: int = 42
+    TRAIN_WINDOW_ROWS: Optional[int] = 5040
+    POOLED_TRAINING_ASSETS = {
+        "Nasdaq100": ["SnP500"],
+    }
 
     # 임계값(Decision Threshold) 탐색 범위
     THRESHOLD_SEARCH_MIN: float = 0.40

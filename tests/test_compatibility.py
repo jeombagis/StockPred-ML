@@ -1,4 +1,6 @@
 import joblib
+import numpy as np
+import pandas as pd
 from stockpred.trainer import ModelTrainer
 from stockpred.feature_engine import FeatureEngine
 from stockpred.backtester import Backtester
@@ -94,3 +96,53 @@ class TestMainProjectCompatibility:
 
         bundle = joblib.load(tmp_path / "models_SnP500.pkl")
         assert bundle["baseline_metrics"] == baseline
+
+    def test_train_window_and_pooled_training(self, sample_stock_df, aux_stock_df, tmp_path):
+        """학습 구간 제한(max_train_rows)과 합동 학습(aux_raw_dfs)이 누수 없이 동작하고 번들 규격을 유지하는지 검증"""
+        trainer = ModelTrainer.train(
+            asset_key="Nasdaq100",
+            raw_df=sample_stock_df,
+            fast_mode=True,
+            save_artifacts=True,
+            output_dir=tmp_path,
+            max_train_rows=150,
+            aux_raw_dfs={"SnP500": aux_stock_df},
+        )
+
+        # 대상 자산 150행 + 보조 자산 150행
+        assert trainer.train_rows == 300
+        assert trainer.pooled_assets == ["SnP500"]
+
+        bundle = joblib.load(tmp_path / "models_Nasdaq100.pkl")
+        assert bundle["parameters"]["max_train_rows"] == 150
+        assert bundle["parameters"]["pooled_assets"] == ["SnP500"]
+        assert "Ensemble" in bundle["models"]
+        # 테스트셋은 대상 자산만으로 구성되고 피처 컬럼 순서가 번들과 일치해야 함
+        assert list(bundle["X_test"].columns) == bundle["features"]
+        assert len(bundle["X_test"]) == len(bundle["df_test"]) == len(bundle["y_test"])
+
+    def test_prepare_datasets_no_leakage(self, sample_stock_df, aux_stock_df):
+        """합동 학습 시 스케일러와 Train이 'Test 시작일 이전' 행(대상 + 보조 자산)으로만 구성되어야 함"""
+        fe = FeatureEngine()
+        completed = fe.compute_technical_indicators(sample_stock_df).iloc[:-1]
+        aux = FeatureEngine().compute_technical_indicators(aux_stock_df).iloc[:-1]
+
+        split_idx = int(len(completed) * 0.8)
+        test_start = completed["date"].iloc[split_idx]
+
+        X_train, X_test, y_train, y_test, df_test = ModelTrainer.prepare_datasets(
+            fe, completed, train_split=0.8, max_train_rows=100, aux_completed_dfs=[aux]
+        )
+
+        expected_train = pd.concat(
+            [
+                completed.iloc[split_idx - 100:split_idx],
+                aux[aux["date"] < test_start].iloc[-100:],
+            ]
+        )
+        assert len(X_train) == len(y_train) == 200
+        np.testing.assert_allclose(fe.scaler.mean_, expected_train[fe.features].mean().to_numpy())
+        assert int(y_train.sum()) == int(expected_train["target"].sum())
+
+        assert df_test["date"].iloc[0] == test_start
+        assert len(X_test) == len(y_test) == len(completed) - split_idx

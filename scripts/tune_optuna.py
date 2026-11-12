@@ -36,8 +36,24 @@ def prepare_validation_data(asset_key: str = "SnP500"):
     )
     processed_df = feat_engine.compute_technical_indicators(raw_df)
     completed_df = processed_df.iloc[:-1]
-    X_train, _, y_train, _, _ = feat_engine.split_and_scale(
-        completed_df, train_split=TrainingConfig.TRAIN_SPLIT
+
+    # 정규 학습(ModelTrainer.train)과 같은 학습 구간/합동 학습 구성을 사용
+    norm_key = TrainingConfig.resolve_asset_key(asset_key) or asset_key
+    aux_completed_dfs = []
+    for aux_key in TrainingConfig.POOLED_TRAINING_ASSETS.get(norm_key, []):
+        aux_raw, _, _ = DataLoader.get_stock_data(aux_key, use_yfinance=False)
+        aux_engine = FeatureEngine(
+            window_size=TrainingConfig.WINDOW_SIZE,
+            threshold=TrainingConfig.THRESHOLD,
+        )
+        aux_completed_dfs.append(aux_engine.compute_technical_indicators(aux_raw).iloc[:-1])
+
+    X_train, _, y_train, _, _ = ModelTrainer.prepare_datasets(
+        feat_engine,
+        completed_df,
+        train_split=TrainingConfig.TRAIN_SPLIT,
+        max_train_rows=TrainingConfig.TRAIN_WINDOW_ROWS,
+        aux_completed_dfs=aux_completed_dfs,
     )
 
     # Validation 분할 (Test 세트는 절대 건드리지 않음 -> Out-of-Sample 누수 방지)

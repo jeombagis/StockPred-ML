@@ -27,6 +27,8 @@ def compute_custom_features(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, List[
     custom_feature_names.extend(["close_open_gap", "vol_ma5_ratio"])
     return df, custom_feature_names
 ```
+> ⚠️ **주의 (메인 서버 동기화)**: 메인 서버는 예측 시 자체 `feature_engine.py`로 피처를 계산합니다. 피처를 추가·변경한 PR이 머지되면 관리자는 `.pkl`과 함께 `python scripts/sync_to_main.py --sync-code`로 피처 엔진 코드도 반드시 동기화해야 합니다. 또한 피처는 OHLCV와 날짜만으로 계산되어야 하며(외부 데이터 불가), 장기 추세 피처 때문에 최소 251거래일의 데이터가 필요합니다.
+>
 > ⚠️ **주의 (Data Leakage 금지)**: 피처 계산 시 `shift(-1)`과 같이 미래 시점의 데이터를 참조하면 `pytest`의 `test_no_future_data_leakage_in_features` 테스트에서 자동으로 차단됩니다.
 
 ---
@@ -69,7 +71,8 @@ estimators_list = [
 
 ### 4️⃣ 타겟 정의 및 학습 전략 수정하기
 - [`stockpred/config.py`](./stockpred/config.py): `WINDOW_SIZE`(시차 피처 일수), `THRESHOLD`(상승 판단 기준 수익률), `TIME_DECAY_MIN_WEIGHT`(과거 데이터 가중치)를 조정할 수 있습니다.
-- [`stockpred/trainer.py`](./stockpred/trainer.py): `compute_sample_weights()` 또는 `optimize_threshold()` 함수를 수정하여 임계값 탐색 전략을 고도화할 수 있습니다.
+- [`stockpred/config.py`](./stockpred/config.py): `TRAIN_WINDOW_ROWS`(학습에 쓸 최근 거래일 수, 기본 약 20년)와 `POOLED_TRAINING_ASSETS`(다른 지수와 합쳐 학습할지)를 조정할 수 있습니다.
+- [`stockpred/trainer.py`](./stockpred/trainer.py): `prepare_datasets()`(학습 데이터 구성), `compute_sample_weights()` 또는 `optimize_threshold()` 함수를 수정하여 임계값 탐색 전략을 고도화할 수 있습니다.
 
 ---
 
@@ -80,7 +83,7 @@ estimators_list = [
    conda activate stock_pred
    pytest tests -v
    ```
-   모든 테스트(`8 passed`)가 통과해야 합니다.
+   모든 테스트(`11 passed`)가 통과해야 합니다.
 
 2. **벤치마크 성적표 생성 및 PR 본문 첨부**
    ```bash

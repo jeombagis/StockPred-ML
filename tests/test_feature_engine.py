@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from stockpred.feature_engine import FeatureEngine, BASE_FEATURE_DESCRIPTIONS
+from stockpred.feature_engine import FeatureEngine, BASE_FEATURE_DESCRIPTIONS, TREND_FEATURES
 
 
 class TestFeatureEngine:
@@ -84,3 +84,13 @@ class TestFeatureEngine:
         engine = FeatureEngine(window_size=5, threshold=0.002)
         engine.compute_technical_indicators(sample_stock_df)
         assert set(BASE_FEATURE_DESCRIPTIONS.keys()) == original_keys
+
+    def test_trend_features_included(self, sample_stock_df):
+        """장기 추세 피처(모멘텀, 200일선, 250일 고점/저점 대비)가 기본 피처에 포함되고 설명이 등록되어야 함"""
+        engine = FeatureEngine()
+        result = engine.compute_technical_indicators(sample_stock_df)
+        for feat in TREND_FEATURES:
+            assert feat in engine.features
+            assert feat in BASE_FEATURE_DESCRIPTIONS
+        assert (result["Drawdown_250"] <= 0).all()
+        assert (result["Runup_250"] >= 0).all()
