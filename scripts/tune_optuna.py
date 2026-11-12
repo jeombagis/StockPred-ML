@@ -36,8 +36,24 @@ def prepare_validation_data(asset_key: str = "SnP500"):
     )
     processed_df = feat_engine.compute_technical_indicators(raw_df)
     completed_df = processed_df.iloc[:-1]
-    X_train, _, y_train, _, _ = feat_engine.split_and_scale(
-        completed_df, train_split=TrainingConfig.TRAIN_SPLIT
+
+    # 정규 학습(ModelTrainer.train)과 같은 학습 구간/합동 학습 구성을 사용
+    norm_key = TrainingConfig.resolve_asset_key(asset_key) or asset_key
+    aux_completed_dfs = []
+    for aux_key in TrainingConfig.POOLED_TRAINING_ASSETS.get(norm_key, []):
+        aux_raw, _, _ = DataLoader.get_stock_data(aux_key, use_yfinance=False)
+        aux_engine = FeatureEngine(
+            window_size=TrainingConfig.WINDOW_SIZE,
+            threshold=TrainingConfig.THRESHOLD,
+        )
+        aux_completed_dfs.append(aux_engine.compute_technical_indicators(aux_raw).iloc[:-1])
+
+    X_train, _, y_train, _, _ = ModelTrainer.prepare_datasets(
+        feat_engine,
+        completed_df,
+        train_split=TrainingConfig.TRAIN_SPLIT,
+        max_train_rows=TrainingConfig.TRAIN_WINDOW_ROWS,
+        aux_completed_dfs=aux_completed_dfs,
     )
 
     # Validation 분할 (Test 세트는 절대 건드리지 않음 -> Out-of-Sample 누수 방지)
@@ -48,7 +64,7 @@ def prepare_validation_data(asset_key: str = "SnP500"):
 
     neg_count = int(sum(y_tr == 0))
     pos_count = int(sum(y_tr == 1))
-    scale_pos = (neg_count / pos_count) if pos_count > 0 else 1.0
+    scale_pos = (neg_count / pos_count) if pos_count > 0 and TrainingConfig.BALANCE_CLASSES else 1.0
 
     return X_tr, y_tr, X_val, y_val, sw_tr, scale_pos, asset_name
 
@@ -106,7 +122,7 @@ def run_tuning(asset_key: str = "SnP500", n_trials: int = 15):
             "num_leaves": int(rng.choice([15, 23, 31, 45])),
             "subsample": float(rng.choice([0.7, 0.8, 0.9])),
             "colsample_bytree": float(rng.choice([0.7, 0.8, 0.9])),
-            "class_weight": "balanced",
+            "class_weight": "balanced" if TrainingConfig.BALANCE_CLASSES else None,
             "verbose": -1,
         }
         model = LGBMClassifier(**cand, random_state=42, n_jobs=-1)
@@ -127,7 +143,7 @@ def run_tuning(asset_key: str = "SnP500", n_trials: int = 15):
             "min_samples_split": int(rng.choice([2, 4, 6])),
             "min_samples_leaf": int(rng.choice([1, 2, 4])),
             "max_features": "sqrt",
-            "class_weight": "balanced",
+            "class_weight": "balanced" if TrainingConfig.BALANCE_CLASSES else None,
         }
         model = RandomForestClassifier(**cand, random_state=42, n_jobs=-1)
         score = evaluate_candidate(model, X_tr, y_tr, X_val, y_val, sw_tr)

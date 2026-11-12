@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss, f1_score, roc_auc_score
 
 from stockpred.config import TrainingConfig, SAVED_MODELS_DIR
 from stockpred.feature_engine import FeatureEngine, get_feature_description
@@ -100,6 +100,9 @@ class ModelTrainer:
         self.window_size: int = TrainingConfig.WINDOW_SIZE
         self.threshold: float = TrainingConfig.THRESHOLD
         self.train_split: float = TrainingConfig.TRAIN_SPLIT
+        self.max_train_rows: Optional[int] = TrainingConfig.TRAIN_WINDOW_ROWS
+        self.pooled_assets: List[str] = []
+        self.train_rows: int = 0
         self.train_date: str = ""
         self.total_records: int = 0
         self.X_test: Optional[pd.DataFrame] = None
@@ -140,11 +143,19 @@ class ModelTrainer:
     def classification_metrics(
         y_true: pd.Series, preds: np.ndarray, probs: Optional[np.ndarray] = None
     ) -> Dict[str, Optional[float]]:
-        """Accuracy / Macro F1 / Balanced Accuracy / ROC-AUC 공통 계산 (단일 클래스면 AUC는 None)"""
+        """
+        Accuracy / Macro F1 / Balanced Accuracy / ROC-AUC / Brier 공통 계산.
+        - roc_auc: 단일 클래스면 None
+        - brier: 확률 정확도 (낮을수록 좋음, 기준선은 baseline_metrics['brier'])
+        """
         auc: Optional[float] = None
-        if probs is not None and len(np.unique(y_true)) > 1:
-            auc = round(float(roc_auc_score(y_true, probs)), 4)
+        brier: Optional[float] = None
+        if probs is not None and len(y_true) > 0:
+            brier = round(float(brier_score_loss(y_true, probs)), 4)
+            if len(np.unique(y_true)) > 1:
+                auc = round(float(roc_auc_score(y_true, probs)), 4)
         return {
+            "brier": brier,
             "accuracy": round(float(accuracy_score(y_true, preds)), 4),
             "f1_score": round(float(f1_score(y_true, preds, average="macro", zero_division=0)), 4),
             "balanced_accuracy": round(float(balanced_accuracy_score(y_true, preds)), 4),
@@ -161,9 +172,64 @@ class ModelTrainer:
         preds = np.full(len(y_test), majority, dtype=int)
         metrics = cls.classification_metrics(y_test, preds)
         metrics["roc_auc"] = 0.5  # 상수 예측의 AUC
+        # 확률 기준선: 항상 Train 상승 비율을 확률로 답했을 때의 Brier 점수
+        base_rate = float(y_train.mean()) if len(y_train) > 0 else 0.5
+        metrics["brier"] = (
+            round(float(brier_score_loss(y_test, np.full(len(y_test), base_rate))), 4) if len(y_test) > 0 else None
+        )
         metrics["majority_class"] = majority
         metrics["test_positive_rate"] = round(float(y_test.mean()), 4) if len(y_test) > 0 else 0.0
         return metrics
+
+    @staticmethod
+    def prepare_datasets(
+        feat_engine: FeatureEngine,
+        completed_df: pd.DataFrame,
+        train_split: float = TrainingConfig.TRAIN_SPLIT,
+        max_train_rows: Optional[int] = TrainingConfig.TRAIN_WINDOW_ROWS,
+        aux_completed_dfs: Optional[List[pd.DataFrame]] = None,
+    ):
+        """
+        [크루원 튜닝 영역 ④] 학습/테스트 데이터 구성 (Data Leakage 방지)
+
+        1. 시간 순서대로 Train/Test를 나눕니다 (Test = 마지막 1 - train_split 구간).
+        2. Train은 테스트 직전의 최근 `max_train_rows` 거래일만 사용합니다 (None이면 전체).
+        3. `aux_completed_dfs`(다른 지수의 피처 DataFrame)가 주어지면, 각 보조 자산에서
+           '테스트 시작일 이전' 행만 같은 길이로 잘라 Train에 합칩니다 (합동 학습).
+        4. 스케일러는 최종 Train 데이터로만 fit 합니다.
+
+        Returns:
+            X_train, X_test, y_train, y_test, df_test (split_and_scale과 같은 형식)
+        """
+        features = feat_engine.features
+        split_idx = int(len(completed_df) * train_split)
+        train_df = completed_df.iloc[:split_idx]
+        test_df = completed_df.iloc[split_idx:]
+        if max_train_rows:
+            train_df = train_df.iloc[-max_train_rows:]
+
+        parts = [train_df]
+        if aux_completed_dfs and len(test_df) > 0:
+            test_start = str(test_df["date"].iloc[0])
+            for aux_df in aux_completed_dfs:
+                aux_train = aux_df[aux_df["date"].astype(str) < test_start]
+                if max_train_rows:
+                    aux_train = aux_train.iloc[-max_train_rows:]
+                parts.append(aux_train)
+        if len(parts) > 1:
+            # 여러 자산을 날짜순으로 섞어야 Time-Decay 가중치와 Validation 분할이 시간 순서를 따릅니다.
+            train_df = pd.concat(parts, ignore_index=True).sort_values("date", kind="stable")
+        train_df = train_df.reset_index(drop=True)
+
+        scaler = feat_engine.scaler
+        X_train = pd.DataFrame(scaler.fit_transform(train_df[features]), columns=features, index=train_df.index)
+        X_test = pd.DataFrame(scaler.transform(test_df[features]), columns=features, index=test_df.index)
+        y_train = train_df["target"]
+        y_test = test_df["target"]
+
+        df_test = test_df.copy().reset_index(drop=True)
+        df_test["Next_Return"] = df_test["Next_Return"].fillna(0)
+        return X_train, X_test, y_train, y_test, df_test
 
     @classmethod
     def train(
@@ -177,9 +243,15 @@ class ModelTrainer:
         custom_params: Optional[Dict[str, Dict[str, Any]]] = None,
         save_artifacts: bool = True,
         output_dir: Path = SAVED_MODELS_DIR,
+        max_train_rows: Optional[int] = TrainingConfig.TRAIN_WINDOW_ROWS,
+        aux_raw_dfs: Optional[Dict[str, pd.DataFrame]] = None,
     ) -> "ModelTrainer":
         """
         단일 자산에 대해 피처 생성 -> 시계열 분할 -> 모델 학습 -> 임계값 최적화 -> Out-of-Sample 평가를 수행합니다.
+
+        - max_train_rows: 학습에 쓸 최근 거래일 수 (None이면 전체 기간)
+        - aux_raw_dfs: {자산 키: 원본 OHLCV DataFrame}. 주어지면 해당 자산들의 과거 구간을 합쳐 학습합니다
+          (`TrainingConfig.POOLED_TRAINING_ASSETS` 참고). 평가와 예측은 항상 대상 자산만으로 수행합니다.
         """
         norm_key = TrainingConfig.resolve_asset_key(asset_key) or asset_key
         asset_info = TrainingConfig.PRESET_ASSETS.get(norm_key, {"name": norm_key})
@@ -191,13 +263,23 @@ class ModelTrainer:
 
         # 익일 수익률이 확정된 완료 거래일 기준 학습/테스트 분할
         completed_df = processed_df.iloc[:-1] if len(processed_df) > 1 else processed_df
-        X_train, X_test, y_train, y_test, df_test = feat_engine.split_and_scale(
-            completed_df, train_split=train_split
+        aux_completed_dfs: List[pd.DataFrame] = []
+        for aux_raw in (aux_raw_dfs or {}).values():
+            aux_engine = type(feat_engine)(window_size=window_size, threshold=threshold)
+            aux_processed = aux_engine.compute_technical_indicators(aux_raw)
+            aux_completed_dfs.append(aux_processed.iloc[:-1])
+
+        X_train, X_test, y_train, y_test, df_test = cls.prepare_datasets(
+            feat_engine,
+            completed_df,
+            train_split=train_split,
+            max_train_rows=max_train_rows,
+            aux_completed_dfs=aux_completed_dfs,
         )
 
         neg_count = int(sum(y_train == 0))
         pos_count = int(sum(y_train == 1))
-        scale_pos = (neg_count / pos_count) if pos_count > 0 else 1.0
+        scale_pos = (neg_count / pos_count) if pos_count > 0 and TrainingConfig.BALANCE_CLASSES else 1.0
         sample_weights = cls.compute_sample_weights(y_train)
 
         models_dict = build_models(
@@ -253,6 +335,9 @@ class ModelTrainer:
         trainer.window_size = window_size
         trainer.threshold = threshold
         trainer.train_split = train_split
+        trainer.max_train_rows = max_train_rows
+        trainer.pooled_assets = sorted((aux_raw_dfs or {}).keys())
+        trainer.train_rows = len(X_train)
         trainer.train_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         trainer.total_records = len(processed_df)
         trainer.X_test = X_test
@@ -295,6 +380,10 @@ class ModelTrainer:
                 "window_size": self.window_size,
                 "threshold": self.threshold,
                 "train_split": self.train_split,
+                "max_train_rows": self.max_train_rows,
+                "pooled_assets": self.pooled_assets,
+                "train_rows": self.train_rows,
+                "balance_classes": TrainingConfig.BALANCE_CLASSES,
             },
         }
         joblib.dump(bundle, bundle_file)

@@ -36,11 +36,20 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
     summary_rows = []
     feature_top5_map = {}
 
+    # 합동 학습(POOLED_TRAINING_ASSETS)에 쓰기 위해 전 자산 데이터를 먼저 로드
+    loaded = {
+        key: DataLoader.get_stock_data(key, use_yfinance=use_yfinance)
+        for key in TrainingConfig.PRESET_ASSETS
+    }
+
     for asset_key, info in TrainingConfig.PRESET_ASSETS.items():
         print(f"\n🚀 [{info['name']} ({asset_key})] 데이터 로드 및 피처 엔지니어링 중...")
-        raw_df, asset_name, ticker = DataLoader.get_stock_data(
-            asset_key, use_yfinance=use_yfinance
-        )
+        raw_df, asset_name, ticker = loaded[asset_key]
+        aux_raw_dfs = {
+            aux_key: loaded[aux_key][0]
+            for aux_key in TrainingConfig.POOLED_TRAINING_ASSETS.get(asset_key, [])
+            if aux_key in loaded
+        }
 
         trainer = ModelTrainer.train(
             asset_key=asset_key,
@@ -50,6 +59,7 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
             train_split=TrainingConfig.TRAIN_SPLIT,
             fast_mode=fast_mode,
             save_artifacts=True,
+            aux_raw_dfs=aux_raw_dfs,
         )
 
         feat_engine = FeatureEngine(
@@ -65,6 +75,8 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
         feature_top5_map[asset_name] = top_features
 
         print(f" - 총 거래일 레코드: {trainer.total_records:,}건 | 사용 피처 수: {len(trainer.features)}개")
+        pooled_label = f" (합동 학습: {', '.join(trainer.pooled_assets)})" if trainer.pooled_assets else ""
+        print(f" - 학습 행 수: {trainer.train_rows:,}건{pooled_label}")
         print(
             f" - 최근 20거래일 적중률: {bt_20['hit_ratio_pct']:.1f}% ({bt_20['hit_count']}/{bt_20['total_days']})"
         )
@@ -94,6 +106,7 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
                     "f1_score": metrics["f1_score"],
                     "balanced_accuracy": metrics["balanced_accuracy"],
                     "roc_auc": metrics["roc_auc"],
+                    "brier": metrics["brier"],
                     "threshold": metrics["best_threshold"],
                     "hit_20d": bt_20["hit_ratio_pct"] if model_name == "Ensemble" else None,
                     "hit_60d": bt_60["hit_ratio_pct"] if model_name == "Ensemble" else None,
@@ -109,6 +122,7 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
                 "f1_score": baseline["f1_score"],
                 "balanced_accuracy": baseline["balanced_accuracy"],
                 "roc_auc": baseline["roc_auc"],
+                "brier": baseline["brier"],
                 "threshold": None,
                 "hit_20d": _baseline_hit_ratio(completed_targets, majority, 20),
                 "hit_60d": _baseline_hit_ratio(completed_targets, majority, 60),
@@ -124,17 +138,21 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
     print(
         f"- **실험 설정**: `WINDOW_SIZE={TrainingConfig.WINDOW_SIZE}`, "
         f"`THRESHOLD={TrainingConfig.THRESHOLD}`, `TRAIN_SPLIT={TrainingConfig.TRAIN_SPLIT}`, "
+        f"`TRAIN_WINDOW_ROWS={TrainingConfig.TRAIN_WINDOW_ROWS}`, "
+        f"`POOLED_TRAINING_ASSETS={TrainingConfig.POOLED_TRAINING_ASSETS}`, "
+        f"`BALANCE_CLASSES={TrainingConfig.BALANCE_CLASSES}`, "
         f"`총 피처 수={len(trainer.features)}개`\n"
     )
     print(
         "> 기준선(Baseline)은 Train 다수 클래스를 Test 전 기간 동일하게 예측한 결과입니다. "
-        "`Δ Acc`가 음수면 해당 모델은 '항상 같은 답'보다 정확도가 낮습니다.\n"
+        "`Δ Acc`가 음수면 해당 모델은 '항상 같은 답'보다 정확도가 낮습니다. "
+        "`Brier`는 확률 정확도(낮을수록 좋음)이며, 기준선 행의 값은 항상 Train 상승 비율을 확률로 답한 경우입니다.\n"
     )
     print(
-        "| 지수 (Asset) | 모델 (Model) | Accuracy | Δ Acc vs 기준선 | Macro F1 | Balanced Acc | ROC-AUC "
+        "| 지수 (Asset) | 모델 (Model) | Accuracy | Δ Acc vs 기준선 | Macro F1 | Balanced Acc | ROC-AUC | Brier "
         "| 최적 Threshold | 최근 20일 적중률 | 최근 60일 적중률 |"
     )
-    print("| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
+    print("| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
     for r in summary_rows:
         h20 = f"**{r['hit_20d']:.1f}%**" if r["hit_20d"] is not None else "-"
         h60 = f"**{r['hit_60d']:.1f}%**" if r["hit_60d"] is not None else "-"
@@ -144,9 +162,10 @@ def run_benchmark(use_yfinance: bool = False, fast_mode: bool = False):
         delta = f"{r['acc_delta']:+.4f}" if r["acc_delta"] is not None else "-"
         auc = f"{r['roc_auc']:.4f}" if r["roc_auc"] is not None else "-"
         th = f"{r['threshold']:.4f}" if r["threshold"] is not None else "-"
+        brier = f"{r['brier']:.4f}" if r["brier"] is not None else "-"
         print(
             f"| {r['asset']} | {m_label} | {r['accuracy']:.4f} | {delta} | {r['f1_score']:.4f} "
-            f"| {r['balanced_accuracy']:.4f} | {auc} | {th} | {h20} | {h60} |"
+            f"| {r['balanced_accuracy']:.4f} | {auc} | {brier} | {th} | {h20} | {h60} |"
         )
 
     below = [f"{r['asset']} {r['model']}" for r in summary_rows if r["acc_delta"] is not None and r["acc_delta"] < 0]

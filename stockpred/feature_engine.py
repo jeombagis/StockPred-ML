@@ -7,7 +7,7 @@ from stockpred.config import TrainingConfig
 
 logger = logging.getLogger(__name__)
 
-# 기본 18개 기술적 지표 설명 (시차 피처 10개 포함 시 기본 총 28개)
+# 기본 25개 기술적 지표 설명 (시차 피처 10개 포함 시 기본 총 35개)
 BASE_FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "return": "전일 대비 일간 종가 등락률",
     "vol_change": "전일 대비 일간 거래량 변동률",
@@ -27,7 +27,23 @@ BASE_FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "EMA_10": "10일 지수이동평균 비율 (EMA_10 / 종가)",
     "EMA_20": "20일 지수이동평균 비율 (EMA_20 / 종가)",
     "EMA_50": "50일 지수이동평균 비율 (EMA_50 / 종가)",
+    "MOM_5": "5일간 가격 변화율 (단기 모멘텀)",
+    "MOM_60": "60일간 가격 변화율 (분기 모멘텀)",
+    "MOM_120": "120일간 가격 변화율 (반기 모멘텀)",
+    "MOM_250": "250일간 가격 변화율 (연간 모멘텀)",
+    "MA200_Ratio": "200일 이동평균 대비 종가 비율 (장기 추세 위/아래)",
+    "Drawdown_250": "최근 250일 최고 종가 대비 하락률",
+    "Runup_250": "최근 250일 최저 종가 대비 상승률",
 }
+
+# 장기 추세 피처 계산에 필요한 최소 과거 거래일 수 (이보다 짧은 데이터는 유효 행이 남지 않음)
+MIN_HISTORY_ROWS = 251
+TREND_MOMENTUM_WINDOWS = [5, 60, 120, 250]
+TREND_FEATURES: List[str] = [f"MOM_{n}" for n in TREND_MOMENTUM_WINDOWS] + [
+    "MA200_Ratio",
+    "Drawdown_250",
+    "Runup_250",
+]
 
 # ===========================================================================
 # [크루원 튜닝 영역 ①-A] 커스텀 피처 설명 등록
@@ -110,7 +126,7 @@ class FeatureEngine:
 
     def compute_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        기본 기술적 지표(28개) + 크루원 커스텀 피처 계산 및 타겟(target) 생성
+        기본 기술적 지표(35개) + 크루원 커스텀 피처 계산 및 타겟(target) 생성
         """
         df = df.copy()
 
@@ -169,6 +185,13 @@ class FeatureEngine:
         df["ROC_10"] = df["close"].pct_change(periods=10)
         df["ROC_20"] = df["close"].pct_change(periods=20)
 
+        # 8-1. 장기 추세 피처 (워크포워드 검증에서 S&P 500 앙상블 AUC +0.003~0.004)
+        for n in TREND_MOMENTUM_WINDOWS:
+            df[f"MOM_{n}"] = df["close"].pct_change(periods=n)
+        df["MA200_Ratio"] = df["close"] / df["close"].rolling(window=200).mean().replace(0, np.nan)
+        df["Drawdown_250"] = df["close"] / df["close"].rolling(window=250).max().replace(0, np.nan) - 1
+        df["Runup_250"] = df["close"] / df["close"].rolling(window=250).min().replace(0, np.nan) - 1
+
         # 9. 시차(Lag) 피처
         lag_features = {}
         for i in range(1, self.window_size + 1):
@@ -197,6 +220,7 @@ class FeatureEngine:
                 "ROC_20",
             ]
             + [f"EMA_{s}" for s in [5, 10, 20, 50]]
+            + TREND_FEATURES
             + [f"return_lag_{i}" for i in range(1, self.window_size + 1)]
             + [f"vol_lag_{i}" for i in range(1, self.window_size + 1)]
         )
